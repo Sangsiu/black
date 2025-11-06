@@ -1,1 +1,249 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mnet Vote Rank Viewer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="color-scheme" content="light dark" />
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    .mono { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 min-h-screen">
+  <div class="max-w-6xl mx-auto p-4 sm:p-6">
+    <header class="mb-6">
+      <h1 class="text-2xl sm:text-3xl font-bold tracking-tight">Mnet Vote Rank Viewer</h1>
+      <p class="text-sm text-slate-600 dark:text-slate-300 mt-1">
+        Menampilkan <b>Rank</b> dan <b>Name</b> saja (tanpa nomor urut), dikelompokkan per <b>Group</b>.
+      </p>
+    </header>
+
+    <section class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm p-4 sm:p-5 mb-6">
+      <form id="form" class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+        <div class="md:col-span-6">
+          <label class="block text-sm font-medium mb-1" for="voteId">Vote ID</label>
+          <input id="voteId" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900" value="690020de20a9a4058b351522" />
+          <p class="text-xs text-slate-500 mt-1">Default: ID yang kamu pakai.</p>
+        </div>
+        <div class="md:col-span-4">
+          <label class="block text-sm font-medium mb-1" for="groupFilter">Filter Group (opsional)</label>
+          <input id="groupFilter" type="text" class="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900" placeholder="nama group persis (case-sensitive)" />
+          <p class="text-xs text-slate-500 mt-1">Biarkan kosong untuk semua grup.</p>
+        </div>
+        <div class="md:col-span-2 flex gap-2">
+          <button id="loadBtn" type="submit" class="inline-flex justify-center items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 shadow">Muat Data</button>
+          <button id="exportBtn" type="button" class="inline-flex justify-center items-center gap-2 px-4 py-2 rounded-xl bg-slate-700 text-white hover:bg-slate-800 active:bg-slate-900 shadow">Export CSV</button>
+        </div>
+        <div class="md:col-span-12">
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input id="flatToggle" type="checkbox" class="h-4 w-4 rounded border-slate-300 dark:border-slate-600" />
+            <span>Tampilkan dalam satu tabel datar (dengan kolom Group)</span>
+          </label>
+        </div>
+      </form>
+      <p class="text-xs text-amber-600 dark:text-amber-400 mt-3">
+        Endpoint dipanggil via <code class="mono">/api/vote/&lt;id&gt;</code> (proxy serverless) agar origin API tidak terekspos langsung.
+      </p>
+    </section>
+
+    <section id="result" class="space-y-6"></section>
+  </div>
+
+  <template id="groupTemplate">
+    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm">
+      <div class="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold"><span class="groupName"></span></h2>
+          <p class="text-xs text-slate-500 mt-0.5"><span class="badge"></span></p>
+        </div>
+        <div class="text-xs text-slate-500"><span class="count"></span> opsi</div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50/70 dark:bg-slate-900/30">
+            <tr>
+              <th class="text-left px-4 py-2 w-24">Rank</th>
+              <th class="text-left px-4 py-2">Name</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200 dark:divide-slate-700"></tbody>
+        </table>
+      </div>
+    </div>
+  </template>
+
+  <template id="flatTemplate">
+    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-sm">
+      <div class="px-4 sm:px-5 py-3 border-b border-slate-200 dark:border-slate-700">
+        <h2 class="text-lg font-semibold">Semua Group</h2>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50/70 dark:bg-slate-900/30">
+            <tr>
+              <th class="text-left px-4 py-2 w-24">Rank</th>
+              <th class="text-left px-4 py-2">Name</th>
+              <th class="text-left px-4 py-2">Group</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200 dark:divide-slate-700"></tbody>
+        </table>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    const $ = (sel, el=document) => el.querySelector(sel);
+
+    async function fetchOptions(voteId) {
+      const res = await fetch(`/api/vote/${encodeURIComponent(voteId)}`);
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`HTTP ${res.status}: ${t.slice(0,200)}`);
+      }
+      const j = await res.json();
+      return { groups: j.data || [] };
+    }
+
+    function normalizeRank(rank) {
+      return (typeof rank === 'number' && rank > 0) ? rank : Number.MAX_SAFE_INTEGER;
+    }
+
+    function renderGrouped(data, groupFilter) {
+      const container = $('#result');
+      container.innerHTML = '';
+
+      const groups = data.groups || [];
+      const selected = groupFilter ? groups.filter(g => g.groupName === groupFilter) : groups;
+      if (!selected.length) {
+        container.innerHTML = `<div class="text-sm text-rose-600">Grup '${groupFilter}' tidak ditemukan.</div>`;
+        return;
+      }
+
+      for (const g of selected) {
+        const tmpl = $('#groupTemplate').content.cloneNode(true);
+        $('.groupName', tmpl).textContent = g.groupName || '(No Group Name)';
+        $('.badge', tmpl).textContent = g.groupBadgeName || '';
+        const opts = (g.options || []).slice().sort((a,b) => normalizeRank(a.rank) - normalizeRank(b.rank));
+        $('.count', tmpl).textContent = opts.length;
+
+        const tbody = tmpl.querySelector('tbody');
+        for (const o of opts) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td class="px-4 py-2 mono">${o.rank ?? '-'}</td>
+            <td class="px-4 py-2">${escapeHtml(o.title || '')}</td>
+          `;
+          tbody.appendChild(tr);
+        }
+        container.appendChild(tmpl);
+      }
+    }
+
+    function renderFlat(data, groupFilter) {
+      const container = $('#result');
+      container.innerHTML = '';
+
+      const groups = data.groups || [];
+      const selected = groupFilter ? groups.filter(g => g.groupName === groupFilter) : groups;
+      if (!selected.length) {
+        container.innerHTML = `<div class="text-sm text-rose-600">Grup '${groupFilter}' tidak ditemukan.</div>`;
+        return;
+      }
+
+      const tmpl = $('#flatTemplate').content.cloneNode(true);
+      const tbody = tmpl.querySelector('tbody');
+
+      const rows = [];
+      for (const g of selected) {
+        for (const o of (g.options || [])) {
+          rows.push({ group: g.groupName || '', rank: o.rank, title: o.title || '' });
+        }
+      }
+      rows.sort((a,b) => normalizeRank(a.rank) - normalizeRank(b.rank) || a.group.localeCompare(b.group));
+
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="px-4 py-2 mono">${r.rank ?? '-'}</td>
+          <td class="px-4 py-2">${escapeHtml(r.title)}</td>
+          <td class="px-4 py-2">${escapeHtml(r.group)}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      container.appendChild(tmpl);
+    }
+
+    function exportCSV(data, groupFilter, flatMode=false) {
+      const groups = data.groups || [];
+      const selected = groupFilter ? groups.filter(g => g.groupName === groupFilter) : groups;
+      const rows = [];
+
+      if (flatMode) {
+        for (const g of selected) {
+          for (const o of (g.options || [])) {
+            rows.push({ group: g.groupName || '', rank: o.rank ?? '', name: o.title || '' });
+          }
+        }
+        rows.sort((a,b) => normalizeRank(a.rank) - normalizeRank(b.rank) || a.group.localeCompare(b.group));
+      } else {
+        for (const g of selected) {
+          const opts = (g.options || []).slice().sort((a,b) => normalizeRank(a.rank) - normalizeRank(b.rank));
+          for (const o of opts) rows.push({ group: g.groupName || '', rank: o.rank ?? '', name: o.title || '' });
+        }
+      }
+
+      const header = 'group,rank,name\n';
+      const csv = header + rows.map(r => [r.group, r.rank, r.name].map(csvEscape).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mnet_ranks_${Date.now()}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    }
+
+    function csvEscape(val) {
+      const s = String(val ?? '');
+      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    }
+
+    const form = document.getElementById('form');
+    const voteIdEl = document.getElementById('voteId');
+    const groupFilterEl = document.getElementById('groupFilter');
+    const flatToggleEl = document.getElementById('flatToggle');
+    const exportBtn = document.getElementById('exportBtn');
+
+    let latestData = null;
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      $('#result').innerHTML = '<div class="text-sm text-slate-500">Memuat…</div>';
+      try {
+        const data = await fetchOptions(voteIdEl.value.trim());
+        latestData = data;
+        const groupFilter = groupFilterEl.value.trim();
+        if (flatToggleEl.checked) renderFlat(data, groupFilter); else renderGrouped(data, groupFilter);
+      } catch (err) {
+        $('#result').innerHTML = `<div class="text-sm text-rose-600">Gagal memuat: ${escapeHtml(err.message)}</div>`;
+      }
+    });
+
+    exportBtn.addEventListener('click', () => {
+      if (!latestData) return alert('Muat data dulu.');
+      exportCSV(latestData, groupFilterEl.value.trim(), flatToggleEl.checked);
+    });
+
+    form.dispatchEvent(new Event('submit'));
+  </script>
+</body>
+</html>
 
